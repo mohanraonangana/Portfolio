@@ -92,11 +92,15 @@ export default function VaultAuth({ mode, onBack, onUnlock, onCreate }) {
               key={i}
               ref={el => (refs.current[i] = el)}
               className="pin-box"
-              type="password"
+              type="text"
               inputMode="numeric"
               pattern="[0-9]*"
-              maxLength={1}
-              value={d}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              maxLength={2}
+              value={d ? '•' : ''}
               onChange={e => updateDigit(i, e.target.value)}
               onKeyDown={e => onKeyDown(i, e)}
               onPaste={onPaste}

@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { Eye, EyeOff, Copy, Pencil, Trash2, Check } from 'lucide-react'
 
-// Sensitive-ID-style fields are intentionally left blank: fill them yourself.
 const GROUPS = [
   { title: 'Personal', fields: [
     { k: 'fullName', label: 'Full Name' },
@@ -50,21 +49,8 @@ const GROUPS = [
   ]},
 ]
 
-const DEFAULTS = {
-  fullName: 'Mohan rao Nangana', dob: '14/09/2004',
-  mobile: '8247038596', altMobile: '9491588191',
-  email: 'nanganamohanrao12@gmail.com',
-  aadhaar: '713982227025', pan: 'JETPM0111J',
-  fatherName: 'nangana Yedukondalu', motherName: 'nangana jyothi',
-  emergencyName: '9247310602', emergencyNumber: '7993154407',
-  permanentAddress: 'bhimavaram',
-  currentAddress: 'bhimavaram', town: 'bhimavaram', district: 'west godavri',
-  state: 'ap', pincode: '534201', country: 'india',
-  bankName: 'State Bank of India (SBI)', accountHolder: 'Mohanrao',
-  accountNumber: '43087114917', accountType: 'Savings',
-  upiId: '8247038596@ybl',
-  other1: '9490661515', other2: '9676267937', other3: '9492077765(maa)',
-}
+// No personal data is stored in source code. Everything you type is saved encrypted on this device only.
+const DEFAULTS = {}
 
 function maskValue(v) {
   if (!v) return ''

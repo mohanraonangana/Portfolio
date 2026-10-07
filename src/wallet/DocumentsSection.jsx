@@ -1,13 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Image as ImageIcon, Eye, Download, Trash2, Plus, Search, X, ZoomIn, ZoomOut, Maximize2, FolderLock } from 'lucide-react'
 import { get, set as dbSet } from './vaultDb.js'
-import adharUrl from '../assets/documents/Nangana_Mohanrao_Adhar.pdf?url'
-import btechUrl from '../assets/documents/Nangana_Mohanrao_Btech.pdf?url'
-import panUrl from '../assets/documents/Nangana_Mohanrao_PanCard.pdf?url'
-import photoUrl from '../assets/documents/Nangana_Mohanrao_Photo.jpeg?url'
-import resumeUrl from '../assets/documents/Nangana_MohanRo_Resume.pdf?url'
-import tenUrl from '../assets/documents/NanganaMohanrao_10&12.pdf?url'
-import drivingLicenceUrl from '../assets/documents/Driving_licence.pdf?url'
 
 // Encrypt raw file bytes with the existing vault key before persisting.
 async function encryptBytes(key, buffer) {
@@ -50,7 +43,6 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
   const [sort, setSort] = useState('name')
   const [preview, setPreview] = useState(null) // {doc, url}
   const [zoom, setZoom] = useState(1)
-  const [seedError, setSeedError] = useState('')
   const fileRef = useRef(null)
 
   const filtered = useMemo(() => {
@@ -108,70 +100,6 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
     onChange(items.filter(d => d.id !== doc.id))
   }
 
-  // Seed the 6 initial documents from src/assets/documents on first use.
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        if (items.length > 0 || (await get('docsSeeded2'))) return
-        const entries = [
-          ['Nangana_Mohanrao_Adhar.pdf', adharUrl],
-          ['Nangana_Mohanrao_Btech.pdf', btechUrl],
-          ['Nangana_Mohanrao_PanCard.pdf', panUrl],
-          ['Nangana_Mohanrao_Photo.jpeg', photoUrl],
-          ['Nangana_MohanRo_Resume.pdf', resumeUrl],
-          ['NanganaMohanrao_10&12.pdf', tenUrl],
-        ]
-        const seeded = []
-        for (const [fname, url] of entries) {
-          const known = KNOWN.find(k => k.match.test(fname))
-          const res = await fetch(url)
-          if (!res.ok) throw new Error('Failed to load ' + fname + ' (' + res.status + ')')
-          const blob = await res.blob()
-          if (blob.size === 0) throw new Error('Empty file: ' + fname)
-          const buf = await blob.arrayBuffer()
-          const enc = await encryptBytes(vaultKey, buf)
-          const id = crypto.randomUUID()
-          await dbSet('doc_' + id, enc)
-          seeded.push({
-            id, name: known ? known.name : fname, cat: known ? known.cat : 'Personal',
-            type: blob.type || (fname.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-            size: blob.size, addedAt: Date.now(),
-          })
-        }
-        if (!cancelled && seeded.length) { onChange(seeded); await dbSet('docsSeeded2', true) }
-      } catch (err) {
-        console.error('Document seeding failed', err)
-        if (!cancelled) setSeedError(err.message || 'Seeding failed')
-      }
-    })()
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // One-time seed for the Driving Licence (added after initial seeding).
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        if (await get('docsSeededLicence')) return
-        if (items.some(d => d.name === 'Driving Licence')) { await dbSet('docsSeededLicence', true); return }
-        const res = await fetch(drivingLicenceUrl)
-        if (!res.ok) return
-        const buf = await (await res.blob()).arrayBuffer()
-        const enc = await encryptBytes(vaultKey, buf)
-        const id = crypto.randomUUID()
-        await dbSet('doc_' + id, enc)
-        if (!cancelled) onChange([...items, { id, name: 'Driving Licence', cat: 'Identity', type: 'application/pdf', size: buf.byteLength, addedAt: Date.now() }])
-        await dbSet('docsSeededLicence', true)
-      } catch (err) {
-        console.error('Licence seeding failed', err)
-      }
-    })()
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   // Clear any open preview when unmounting (vault lock)
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url) }, [preview])
 
@@ -198,13 +126,12 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
         ))}
       </div>
 
-      {seedError && <p style={{ color: '#ff9aa8' }}>Document loading error: {seedError}</p>}
       {items.length === 0 ? (
         <div className="empty-note" style={{ textAlign: 'center', padding: '50px 0' }}>
           <FolderLock size={40} style={{ opacity: 0.5, marginBottom: 12 }} />
           <p>No documents yet.</p>
           <button className="btn btn-primary" onClick={() => fileRef.current.click()}>Import Documents</button>
-          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>Select the 6 files from Desktop → Mine to import them.</p>
+          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>Choose files from this device. They are encrypted in this browser and never uploaded anywhere.</p>
         </div>
       ) : (
         <>
