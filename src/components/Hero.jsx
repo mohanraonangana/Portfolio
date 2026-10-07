@@ -1,10 +1,12 @@
 import React from 'react'
 import { GithubIcon, LinkedinIcon, InstagramIcon } from './BrandIcons.jsx'
-import me from '../assets/photo-new.png'
+import me from '../assets/hero.jpg'
+import HeroVideo from './HeroVideo.jsx'
 
 export default function Hero() {
   return (
     <section id="home" className="hero">
+      <HeroVideo />
       <div className="hero-label">JAVA FULL STACK DEVELOPER · 2026</div>
       <h1>MOHAN<span className="hollow">RAO</span></h1>
       <p className="hero-sub">Building scalable backend systems and modern web applications with Java and Spring Boot.</p>
@@ -12,7 +14,7 @@ export default function Hero() {
 
       <div className="hero-body">
         <div className="hero-frame">
-          <img src={me} alt="Mohanrao" className="hero-img" />
+          <img src={me} alt="Mohanrao" className="hero-img" decoding="async" />
         </div>
         <div>
           <p style={{ color: 'var(--muted)', maxWidth: 460, lineHeight: 1.8 }}>
