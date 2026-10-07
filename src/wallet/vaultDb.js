@@ -31,6 +31,16 @@ export async function set(key, value) {
   })
 }
 
+export async function del(key) {
+  const db = await open()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite')
+    tx.objectStore(STORE).delete(key)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
 export async function clearAll() {
   const db = await open()
   return new Promise((resolve, reject) => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Image as ImageIcon, Eye, Download, Trash2, Plus, Search, X, ZoomIn, ZoomOut, Maximize2, FolderLock } from 'lucide-react'
-import { get, set as dbSet } from './vaultDb.js'
+import { get, set as dbSet, del as dbDel } from './vaultDb.js'
 
 // Encrypt raw file bytes with the existing vault key before persisting.
 async function encryptBytes(key, buffer) {
@@ -24,6 +24,7 @@ async function decryptBytes(key, { iv, ct }) {
 }
 
 const KNOWN = [
+  { match: /driving|licen[cs]e/i, name: 'Driving Licence', cat: 'Identity', replace: true },
   { match: /adhar/i, name: 'Aadhaar Card', cat: 'Identity' },
   { match: /pan/i, name: 'PAN Card', cat: 'Identity' },
   { match: /btech/i, name: 'B.Tech Documents', cat: 'Education' },
@@ -61,19 +62,27 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
 
   const importFiles = async files => {
     const next = [...items]
+    const revoke = [] // old encrypted files to delete once the new list is saved
     for (const file of files) {
       const known = KNOWN.find(k => k.match.test(file.name))
       const buf = await file.arrayBuffer()
       const enc = await encryptBytes(vaultKey, buf)
       const id = crypto.randomUUID()
       await dbSet('doc_' + id, enc)
+      // Documents flagged `replace` (Driving Licence) keep a single current copy:
+      // drop the old entry and revoke its encrypted file from storage.
+      if (known && known.replace) {
+        for (const old of next.filter(d => d.name === known.name)) revoke.push('doc_' + old.id)
+        for (let i = next.length - 1; i >= 0; i--) if (next[i].name === known.name) next.splice(i, 1)
+      }
       next.unshift({
         id, name: known ? known.name : file.name.replace(/\.[^.]+$/, ''),
         cat: known ? known.cat : 'Personal', type: file.type || 'application/pdf',
         size: file.size, addedAt: Date.now(),
       })
     }
-    onChange(next)
+    await onChange(next)
+    for (const key of revoke) await dbDel(key)
   }
 
   const openPreview = async doc => {
