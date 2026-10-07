@@ -124,4 +124,51 @@ select option { background: #0d0f0d; }
   .vault-main { padding: 0 16px 24px; }
 }
 
+/* documents page layout (desktop values identical to the previous inline styles) */
+.doc-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; align-items: center; }
+.doc-search { position: relative; flex: 1; min-width: 200px; }
+.doc-sort { width: auto; }
+.doc-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.doc-group { margin-bottom: 26px; }
+.doc-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.doc-card-title { min-width: 0; }
+.act-label { display: none; }
+
+/* mobile / small screens: documents + compact navigation */
+@media (max-width: 640px) {
+  .wallet-root { overflow-x: hidden; }
+  .vault-dash { min-height: 0; }
+
+  /* compact nav: brand + lock on row 1, three section buttons on row 2 */
+  .vault-side { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px; padding: 10px; border-radius: 14px; }
+  .vault-side .brand-block { grid-column: 1 / 3; grid-row: 1; margin: 0; padding-left: 4px; align-self: center; width: auto; }
+  .vault-side .lock-vault { grid-column: 3; grid-row: 1; margin: 0; }
+  .vault-side button { padding: 9px 4px; font-size: 0.62rem; letter-spacing: 0.06em; line-height: 1.35; text-align: center; min-width: 0; overflow-wrap: anywhere; }
+  .vault-side button.active { border-left: none; border-radius: 10px; }
+  .vault-side button svg { display: block; margin: 0 auto 4px !important; }
+
+  .vault-main { flex: 0 0 auto; width: 100%; min-width: 0; padding: 4px 14px 28px; }
+  .vault-main .kicker { letter-spacing: 0.3em; }
+  .vault-main .muted { margin-bottom: 20px; }
+
+  /* toolbar stacks: search / sort / add each full width */
+  .doc-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }
+  .doc-search { min-width: 0; width: 100%; }
+  .doc-sort { width: 100%; }
+  .doc-add { width: 100%; justify-content: center; }
+  .doc-chips { margin-bottom: 18px; }
+  .doc-group { margin-bottom: 20px; }
+  .doc-none { text-align: center; padding: 18px 0; }
+
+  /* cards: one column, full width, no overflow */
+  .record-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .record { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 16px; }
+  .doc-card-title h4 { overflow-wrap: anywhere; margin-bottom: 6px; }
+  .record-actions { gap: 8px; }
+  .record-actions .icon-btn { flex: 1; min-height: 42px; justify-content: center; align-items: center; gap: 6px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; font-size: 0.72rem; letter-spacing: 0.06em; }
+  .record-actions .act-label { display: inline; }
+  .doc-viewer { width: 96vw; padding: 10px; }
+}
+@media (hover: none) { .record:hover { transform: none; } }
+
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } }

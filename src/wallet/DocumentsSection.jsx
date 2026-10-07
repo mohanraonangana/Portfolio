@@ -177,22 +177,22 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18, alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+      <div className="doc-toolbar">
+        <div className="doc-search">
           <Search size={15} style={{ position: 'absolute', left: 12, top: 14, color: '#8f97b8' }} />
           <input style={{ paddingLeft: 36 }} placeholder="Search documents..." value={query} onChange={e => setQuery(e.target.value)} />
         </div>
-        <select value={sort} onChange={e => setSort(e.target.value)} style={{ width: 'auto' }}>
+        <select className="doc-sort" value={sort} onChange={e => setSort(e.target.value)}>
           <option value="name">Sort: Name</option>
           <option value="date">Sort: Date Added</option>
           <option value="size">Sort: File Size</option>
           <option value="cat">Sort: Category</option>
         </select>
-        <button className="btn btn-primary" onClick={() => fileRef.current.click()}><Plus size={16} /> Add Document</button>
+        <button className="btn btn-primary doc-add" onClick={() => fileRef.current.click()}><Plus size={16} /> Add Document</button>
         <input ref={fileRef} type="file" multiple accept=".pdf,image/*" hidden onChange={e => importFiles([...e.target.files])} />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 22 }}>
+      <div className="doc-chips">
         {['All', ...CATEGORIES].map(c => (
           <button key={c} className={`doc-chip ${filter === c ? 'on' : ''}`} onClick={() => setFilter(c)}>{c}</button>
         ))}
@@ -207,20 +207,22 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
           <p style={{ fontSize: '0.8rem', marginTop: 8 }}>Select the 6 files from Desktop → Mine to import them.</p>
         </div>
       ) : (
-        ORDER.filter(c => filter === 'All' || filter === c).map(cat => {
+        <>
+        {filtered.length === 0 && <p className="empty-note doc-none">No documents match your search or filter.</p>}
+        {ORDER.filter(c => filter === 'All' || filter === c).map(cat => {
           const group = filtered.filter(d => d.cat === cat)
           if (!group.length) return null
           return (
-            <div key={cat} style={{ marginBottom: 26 }}>
+            <div key={cat} className="doc-group">
               <h3 style={{ color: '#8ba2ff', letterSpacing: '0.16em', fontSize: '0.85rem', textTransform: 'uppercase', marginBottom: 14 }}>{cat}</h3>
               <div className="record-grid">
                 {group.map(doc => (
                   <div className="record" key={doc.id}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                    <div className="doc-card-head">
                       {isImage(doc.type)
                         ? <ImageIcon size={26} color="#b07cff" />
                         : <FileText size={26} color="#7da2ff" />}
-                      <div>
+                      <div className="doc-card-title">
                         <h4 style={{ margin: 0 }}>{doc.name}</h4>
                         <span className="chip chip-login">{doc.cat}</span>
                       </div>
@@ -229,16 +231,17 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
                     <div className="field-row"><span className="fl">Size</span><span className="fv">{fmtSize(doc.size)}</span></div>
                     <div className="field-row"><span className="fl">Added</span><span className="fv">{new Date(doc.addedAt).toLocaleDateString()}</span></div>
                     <div className="record-actions">
-                      <button className="icon-btn" title="Open" onClick={() => openPreview(doc)}><Eye size={16} /></button>
-                      <button className="icon-btn" title="Download" onClick={() => download(doc)}><Download size={16} /></button>
-                      <button className="icon-btn" title="Delete" style={{ color: '#ff9aa8' }} onClick={() => removeDoc(doc)}><Trash2 size={16} /></button>
+                      <button className="icon-btn" title="Open" onClick={() => openPreview(doc)}><Eye size={16} /><span className="act-label">View</span></button>
+                      <button className="icon-btn" title="Download" onClick={() => download(doc)}><Download size={16} /><span className="act-label">Download</span></button>
+                      <button className="icon-btn" title="Delete" style={{ color: '#ff9aa8' }} onClick={() => removeDoc(doc)}><Trash2 size={16} /><span className="act-label">Delete</span></button>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           )
-        })
+        })}
+        </>
       )}
 
       {preview && (
