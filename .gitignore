@@ -35,3 +35,4 @@ id_ed25519*
 .env
 .env.*
 Vault-Private-DoNotCommit/
+*vault-backup*

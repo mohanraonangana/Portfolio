@@ -2,13 +2,14 @@ import React, { useState } from 'react'
 import { User, FileText, Settings as SettingsIcon, Lock } from 'lucide-react'
 import PersonalSection from './PersonalSection.jsx'
 import DocumentsSection from './DocumentsSection.jsx'
+import BackupSection from './BackupSection.jsx'
 
 const SECTIONS = [
   { id: 'personal', label: 'Personal Information', icon: User },
   { id: 'documents', label: 'Documents', icon: FileText },
 ]
 
-export default function VaultDashboard({ vaultKey, data, onDataChange, onLock, onWipe, onChangePassword, busy }) {
+export default function VaultDashboard({ vaultKey, vaultId, data, onDataChange, onLock, onWipe, onChangePassword, busy }) {
   const [tab, setTab] = useState('personal')
   const active = SECTIONS.find(s => s.id === tab)
   const [newPass, setNewPass] = useState('')
@@ -50,6 +51,7 @@ export default function VaultDashboard({ vaultKey, data, onDataChange, onLock, o
           ) : (
             <DocumentsSection
               vaultKey={vaultKey}
+              vaultId={vaultId}
               items={data.documents || []}
               onChange={next => onDataChange({ ...data, documents: next })}
             />
@@ -66,6 +68,7 @@ export default function VaultDashboard({ vaultKey, data, onDataChange, onLock, o
               }}>Update Password</button>
               {passMsg && <div style={{ color: '#4ade80', fontSize: '0.85rem' }}>{passMsg}</div>}
             </div>
+            <BackupSection vaultKey={vaultKey} vaultId={vaultId} data={data} onDataChange={onDataChange} />
             <div className="record-form">
               <h4 style={{ color: '#ff9aa8' }}>Danger Zone</h4>
               <p style={{ color: '#7a7f7a', fontSize: '0.88rem' }}>This permanently destroys the encrypted vault stored on this device.</p>

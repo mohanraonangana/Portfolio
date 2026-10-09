@@ -7,6 +7,8 @@ import VaultAuth from './VaultAuth.jsx'
 import VaultDashboard from './VaultDashboard.jsx'
 import { get, set, clearAll } from './vaultDb.js'
 import { deriveKey, encryptObject, decryptObject, randomBytes, EMPTY_VAULT } from './vaultCrypto.js'
+import { isSyncEnabled } from './supabaseClient.js'
+import { putMeta } from './vaultSync.js'
 
 const AUTO_LOCK_MS = 5 * 60 * 1000
 
@@ -15,9 +17,22 @@ export default function WalletApp() {
   const [mode, setMode] = useState('unlock')
   const [key, setKey] = useState(null)
   const [data, setData] = useState(null)
+  const [vaultId, setVaultId] = useState(null)
   const [busy, setBusy] = useState(false)
   const keyRef = useRef(null)
   keyRef.current = key
+
+  // Assign (or recover) a stable random vault id and publish the non-secret salt
+  // so encrypted documents can be decrypted on another device that knows the PIN.
+  const enableSync = async salt => {
+    if (!isSyncEnabled) return
+    try {
+      let vid = await get('vaultId')
+      if (!vid) { vid = crypto.randomUUID(); await set('vaultId', vid) }
+      setVaultId(vid)
+      await putMeta(vid, { salt, format: 'mohanrao-vault', version: 1 })
+    } catch { /* sync is best-effort; the vault works fully offline */ }
+  }
 
   const persist = async (nextData, k = key) => {
     setData(nextData)
@@ -36,6 +51,7 @@ export default function WalletApp() {
     const k = await deriveKey(password, salt)
     await set('salt', salt)
     await set('vault', await encryptObject(k, EMPTY_VAULT))
+    await enableSync(salt)
     setKey(k)
     setData(EMPTY_VAULT)
     setStage('vault')
@@ -47,6 +63,7 @@ export default function WalletApp() {
     const k = await deriveKey(password, salt)
     try {
       const decrypted = await decryptObject(k, payload) // throws on wrong password
+      await enableSync(salt)
       setKey(k)
       setData(decrypted)
       setStage('vault')
@@ -79,6 +96,7 @@ export default function WalletApp() {
         setKey(k)
         setData(decrypted)
         setStage('vault')
+        await enableSync(salt)
       } catch {
         throw new Error('wrong-pin')
       }
@@ -88,6 +106,7 @@ export default function WalletApp() {
   const lock = () => {
     setKey(null)
     setData(null)
+    setVaultId(null)
     setStage('intro')
   }
 
@@ -98,6 +117,7 @@ export default function WalletApp() {
       const k = await deriveKey(newPass, salt)
       await set('salt', salt)
       await set('vault', await encryptObject(k, data))
+      await enableSync(salt)
       setKey(k)
     } finally { setBusy(false) }
   }
@@ -127,7 +147,7 @@ export default function WalletApp() {
           <VaultAuth mode={mode} onBack={() => setStage('intro')} onCreate={create} onUnlock={unlockVault} />
         )}
         {stage === 'vault' && data && (
-          <VaultDashboard vaultKey={key} data={data} onDataChange={d => persist(d)} onLock={lock} onWipe={wipe} onChangePassword={changePassword} busy={busy} />
+          <VaultDashboard vaultKey={key} vaultId={vaultId} data={data} onDataChange={d => persist(d)} onLock={lock} onWipe={wipe} onChangePassword={changePassword} busy={busy} />
         )}
         {stage !== 'vault' && (
           <div style={{ position: 'fixed', top: 18, left: 22, zIndex: 5 }}>

@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Image as ImageIcon, Eye, Download, Trash2, Plus, Search, X, ZoomIn, ZoomOut, Maximize2, FolderLock } from 'lucide-react'
 import { get, set as dbSet, del as dbDel } from './vaultDb.js'
+import { isSyncEnabled, SYNC_BUCKET } from './supabaseClient.js'
+import { uploadDocument, createSignedUrl, removeObject, getLegacyDoc, upsertDocumentMeta, deleteDocumentMeta } from './vaultSync.js'
 
 // Encrypt raw file bytes with the existing vault key before persisting.
 async function encryptBytes(key, buffer) {
@@ -23,6 +25,20 @@ async function decryptBytes(key, { iv, ct }) {
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv) }, key, fromB64(ct))
 }
 
+// SHA-256 of raw bytes, hex-encoded. Used to verify byte-for-byte integrity.
+async function sha256Hex(buffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer)
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Best-effort extension for legacy records that never stored the original name.
+const EXT_BY_MIME = {
+  'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png',
+  'image/webp': '.webp', 'image/gif': '.gif', 'application/pdf': '.pdf',
+}
+const extFor = t => EXT_BY_MIME[t] || ''
+
+
 const KNOWN = [
   { match: /driving|licen[cs]e/i, name: 'Driving Licence', cat: 'Identity', replace: true },
   { match: /adhar/i, name: 'Aadhaar Card', cat: 'Identity' },
@@ -38,7 +54,7 @@ const ORDER = ['Identity', 'Education', 'Personal', 'Career']
 const fmtSize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(0) + ' KB'
 const isImage = t => t.startsWith('image/')
 
-export default function DocumentsSection({ vaultKey, items, onChange }) {
+export default function DocumentsSection({ vaultKey, vaultId, items, onChange }) {
   const [filter, setFilter] = useState('All')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('name')
@@ -62,51 +78,118 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
 
   const importFiles = async files => {
     const next = [...items]
-    const revoke = [] // old encrypted files to delete once the new list is saved
+    const revoke = [] // superseded docs whose stored copies should be removed
     for (const file of files) {
       const known = KNOWN.find(k => k.match.test(file.name))
-      const buf = await file.arrayBuffer()
-      const enc = await encryptBytes(vaultKey, buf)
       const id = crypto.randomUUID()
-      await dbSet('doc_' + id, enc)
+      const originalName = file.name
+      const mime = file.type || 'application/octet-stream'
+      const displayName = known ? known.name : file.name.replace(/\.[^.]+$/, '')
+      let storagePath = null
+      let sha256 = null
+
+      // Preferred path: upload the original bytes unchanged with the real
+      // content type, and record the metadata row.
+      if (isSyncEnabled && vaultId) {
+        try {
+          sha256 = await sha256Hex(await file.arrayBuffer())
+          storagePath = await uploadDocument(vaultId, id, originalName, file)
+          await upsertDocumentMeta({
+            id, vault_id: vaultId, display_name: displayName,
+            original_name: originalName, mime_type: mime, size: file.size,
+            bucket: SYNC_BUCKET, storage_path: storagePath, sha256,
+          })
+        } catch {
+          storagePath = null // offline / failed: fall back to local encrypted copy
+        }
+      }
+      // Offline fallback: keep the legacy encrypted copy in IndexedDB.
+      if (!storagePath) {
+        const enc = await encryptBytes(vaultKey, await file.arrayBuffer())
+        await dbSet('doc_' + id, enc)
+      }
+
       // Documents flagged `replace` (Driving Licence) keep a single current copy:
-      // drop the old entry and revoke its encrypted file from storage.
+      // drop the old entry and remove its stored file.
       if (known && known.replace) {
-        for (const old of next.filter(d => d.name === known.name)) revoke.push('doc_' + old.id)
+        for (const old of next.filter(d => d.name === known.name)) revoke.push(old)
         for (let i = next.length - 1; i >= 0; i--) if (next[i].name === known.name) next.splice(i, 1)
       }
       next.unshift({
-        id, name: known ? known.name : file.name.replace(/\.[^.]+$/, ''),
-        cat: known ? known.cat : 'Personal', type: file.type || 'application/pdf',
+        id, name: displayName, cat: known ? known.cat : 'Personal', type: mime,
         size: file.size, addedAt: Date.now(),
+        originalName, storagePath, bucket: storagePath ? SYNC_BUCKET : null, sha256,
       })
     }
     await onChange(next)
-    for (const key of revoke) await dbDel(key)
+    for (const old of revoke) {
+      await dbDel('doc_' + old.id)
+      if (isSyncEnabled) {
+        try {
+          if (old.storagePath) await removeObject(old.storagePath)
+          else await removeObject(`${vaultId}/${old.id}`) // legacy encrypted payload
+        } catch { /* ignore */ }
+        try { await deleteDocumentMeta(old.id) } catch { /* ignore */ }
+      }
+    }
+  }
+
+  // Resolve a viewable URL: signed URL for cloud files, decrypted blob for the
+  // legacy local/encrypted documents.
+  const resolveUrl = async doc => {
+    if (doc.storagePath && isSyncEnabled) {
+      const url = await createSignedUrl(doc.storagePath, { expiresIn: 600 })
+      if (url) return url
+    }
+    let enc = await get('doc_' + doc.id)
+    if (!enc && isSyncEnabled) {
+      enc = await getLegacyDoc(vaultId, doc.id)
+      if (enc) await dbSet('doc_' + doc.id, enc) // cache remote copy locally
+    }
+    if (!enc) return null
+    const plain = await decryptBytes(vaultKey, enc)
+    return URL.createObjectURL(new Blob([plain], { type: doc.type }))
   }
 
   const openPreview = async doc => {
-    const enc = await get('doc_' + doc.id)
-    if (!enc) return
-    const plain = await decryptBytes(vaultKey, enc)
-    const url = URL.createObjectURL(new Blob([plain], { type: doc.type }))
+    const url = await resolveUrl(doc)
+    if (!url) return
     setZoom(1)
     setPreview({ doc, url })
   }
 
   const download = async doc => {
-    const enc = await get('doc_' + doc.id)
-    if (!enc) return
-    const plain = await decryptBytes(vaultKey, enc)
-    const url = URL.createObjectURL(new Blob([plain], { type: doc.type }))
+    const filename = doc.originalName || (doc.name + extFor(doc.type))
+    if (doc.storagePath && isSyncEnabled) {
+      try {
+        const url = await createSignedUrl(doc.storagePath, { expiresIn: 300, download: filename })
+        if (url) {
+          const a = document.createElement('a')
+          a.href = url; a.download = filename; a.rel = 'noopener'
+          document.body.appendChild(a); a.click(); a.remove()
+          return
+        }
+      } catch { /* fall through to local copy */ }
+    }
+    const url = await resolveUrl(doc)
+    if (!url) return
     const a = document.createElement('a')
-    a.href = url; a.download = doc.name + (isImage(doc.type) ? '.jpg' : '.pdf'); a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 5000)
+    a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); a.remove()
+    if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
   const removeDoc = async doc => {
     if (!window.confirm(`Delete "${doc.name}" from your vault?`)) return
     onChange(items.filter(d => d.id !== doc.id))
+    await dbDel('doc_' + doc.id)
+    if (isSyncEnabled) {
+      try {
+        if (doc.storagePath) await removeObject(doc.storagePath)
+        else await removeObject(`${vaultId}/${doc.id}`) // legacy encrypted payload
+      } catch { /* ignore */ }
+      try { await deleteDocumentMeta(doc.id) } catch { /* ignore */ }
+    }
   }
 
   // Clear any open preview when unmounting (vault lock)
@@ -140,7 +223,7 @@ export default function DocumentsSection({ vaultKey, items, onChange }) {
           <FolderLock size={40} style={{ opacity: 0.5, marginBottom: 12 }} />
           <p>No documents yet.</p>
           <button className="btn btn-primary" onClick={() => fileRef.current.click()}>Import Documents</button>
-          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>Choose files from this device. They are encrypted in this browser and never uploaded anywhere.</p>
+          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>{isSyncEnabled ? 'Files are uploaded to your Supabase vault in their original format.' : 'Choose files from this device. They are encrypted in this browser and never uploaded anywhere.'}</p>
         </div>
       ) : (
         <>
