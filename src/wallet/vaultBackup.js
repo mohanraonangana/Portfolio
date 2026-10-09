@@ -1,13 +1,15 @@
-// Encrypted vault backup / restore (client-side only, nothing is ever uploaded).
+// Vault backup / restore.
 //
-// A backup file contains the Personal record + all Documents (metadata AND file bytes),
-// sealed with AES-256-GCM under a key derived (PBKDF2-SHA256) from a *backup passphrase*
-// that you choose at export time. It is independent of the device PIN/salt, so the file
-// can be moved between devices (AirDrop, cloud drive, ...) and merged into another vault.
-import { get, set as dbSet, del as dbDel } from './vaultDb.js'
+// A backup file contains your Personal record and document *metadata*, sealed
+// with AES-256-GCM under a key derived (PBKDF2-SHA256) from a backup passphrase
+// you choose at export time (not your PIN). Document bytes are NOT included —
+// they live in Supabase Storage and are referenced by path. Importing merges
+// metadata into Supabase without creating duplicates.
+import { listDocuments, upsertDocumentMeta, savePersonal } from './vaultSync.js'
+import { rowToDoc, docToRow } from './vaultData.js'
 
 const FORMAT = 'mohanrao-vault-backup'
-const VERSION = 1
+const VERSION = 2
 const ITERATIONS = 250000
 
 const toB64 = buf => {
@@ -26,7 +28,6 @@ async function backupKey(passphrase, salt) {
   )
 }
 
-// Same {iv, ct} AES-GCM layout the Documents section already uses for stored files.
 async function sealBytes(key, buffer) {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer)
@@ -36,30 +37,24 @@ async function openBytes(key, { iv, ct }) {
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv) }, key, fromB64(ct))
 }
 
-export async function createBackup({ vaultKey, data, passphrase, vaultId }) {
-  const files = {}
-  const documents = []
-  for (const d of data.documents || []) {
-    const enc = await get('doc_' + d.id)
-    if (!enc) continue
-    files[d.id] = toB64(await openBytes(vaultKey, enc))
-    documents.push(d)
+export async function createBackup({ data, passphrase }) {
+  const payload = {
+    createdAt: Date.now(),
+    personal: data.personal || [],
+    documents: (data.documents || []).map(docToRow),
   }
-  const payload = { createdAt: Date.now(), vaultId: vaultId || null, personal: data.personal || [], documents, files }
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const key = await backupKey(passphrase, salt)
   const sealed = await sealBytes(key, new TextEncoder().encode(JSON.stringify(payload)))
   return JSON.stringify({ format: FORMAT, version: VERSION, kdf: 'PBKDF2-SHA256', iterations: ITERATIONS, salt: toB64(salt), ...sealed })
 }
 
-// Merges a backup into the current vault. Never removes anything that isn't superseded:
-//  - documents are matched by name; identical (same name + size) or older ones are skipped,
-//    a newer one replaces the old entry and the old encrypted file is revoked (no duplicates)
-//  - the Personal record is only taken if this vault has none yet
-export async function restoreBackup({ text, passphrase, vaultKey, data, onDataChange }) {
+// Merge a backup into the vault (Supabase). Documents are deduped by storage
+// path; the Personal record is only taken if the vault has none yet.
+export async function restoreBackup({ text, passphrase, data, onDataChange }) {
   let file
   try { file = JSON.parse(text) } catch { throw new Error('This is not a valid backup file.') }
-  if (file.format !== FORMAT || file.version !== VERSION) throw new Error('This is not a valid backup file.')
+  if (file.format !== FORMAT) throw new Error('This is not a valid backup file.')
 
   let payload
   try {
@@ -67,38 +62,37 @@ export async function restoreBackup({ text, passphrase, vaultKey, data, onDataCh
     payload = JSON.parse(new TextDecoder().decode(await openBytes(key, file)))
   } catch { throw new Error('Wrong passphrase, or the backup file is damaged.') }
 
+  const existing = await listDocuments().catch(() => [])
+  const knownPaths = new Set((existing || []).map(r => r.storage_path))
   const next = [...(data.documents || [])]
-  const revoke = []
-  const summary = { added: [], replaced: [], skipped: [], personal: false }
+  const summary = { added: [], skipped: [], personal: false }
 
-  for (const doc of payload.documents || []) {
-    const b64 = payload.files && payload.files[doc.id]
-    if (!b64) continue
-    const same = next.filter(d => d.name === doc.name)
-    if (same.some(d => d.size === doc.size)) { summary.skipped.push(doc.name); continue }
-    if (same.length && same.every(d => (d.addedAt || 0) >= (doc.addedAt || 0))) { summary.skipped.push(doc.name); continue }
-
-    const id = crypto.randomUUID()
-    await dbSet('doc_' + id, await sealBytes(vaultKey, fromB64(b64)))
-    if (same.length) {
-      for (const old of same) { revoke.push('doc_' + old.id); next.splice(next.indexOf(old), 1) }
-      summary.replaced.push(doc.name)
-    } else summary.added.push(doc.name)
-    next.push({ ...doc, id })
+  for (const row of payload.documents || []) {
+    if (!row || !row.storage_path) continue
+    const name = row.original_name || row.display_name || row.storage_path
+    if (knownPaths.has(row.storage_path) || next.some(d => d.storagePath === row.storage_path)) {
+      summary.skipped.push(name)
+      continue
+    }
+    try {
+      await upsertDocumentMeta(row)
+      next.push(rowToDoc(row))
+      knownPaths.add(row.storage_path)
+      summary.added.push(name)
+    } catch {
+      summary.skipped.push(name)
+    }
   }
 
   let personal = data.personal || []
-  if (!personal[0] && payload.personal && payload.personal[0]) { personal = payload.personal; summary.personal = true }
-
-  // Carry the cloud sync id across devices so restored documents continue to sync.
-  if (payload.vaultId && !(await get('vaultId'))) {
-    await dbSet('vaultId', payload.vaultId)
-    summary.vaultId = true
+  if (!personal[0] && payload.personal && payload.personal[0]) {
+    personal = payload.personal
+    summary.personal = true
+    try { await savePersonal(personal[0]) } catch { /* ignore */ }
   }
 
-  if (summary.added.length || summary.replaced.length || summary.personal) {
+  if (summary.added.length || summary.personal) {
     await onDataChange({ ...data, personal, documents: next })
-    for (const key of revoke) await dbDel(key) // only after the new list is saved
   }
   return summary
 }

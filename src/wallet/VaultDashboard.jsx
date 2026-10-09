@@ -9,11 +9,9 @@ const SECTIONS = [
   { id: 'documents', label: 'Documents', icon: FileText },
 ]
 
-export default function VaultDashboard({ vaultKey, vaultId, data, onDataChange, onLock, onWipe, onChangePassword, busy }) {
+export default function VaultDashboard({ data, onDataChange, onLock, onWipe, busy }) {
   const [tab, setTab] = useState('personal')
   const active = SECTIONS.find(s => s.id === tab)
-  const [newPass, setNewPass] = useState('')
-  const [passMsg, setPassMsg] = useState('')
 
   return (
     <div className="vault-dash">
@@ -39,7 +37,7 @@ export default function VaultDashboard({ vaultKey, vaultId, data, onDataChange, 
       <main className="vault-main">
         <div className="kicker">PRIVATE ARCHIVE</div>
         <h2>My Personal Vault</h2>
-        <p className="muted">{active ? active.label : 'Settings'} · Encrypted personal information · auto-locks when idle</p>
+        <p className="muted">{active ? active.label : 'Settings'} · Stored in Supabase · auto-locks when idle</p>
 
         {active ? (
           active.id === 'personal' ? (
@@ -50,8 +48,6 @@ export default function VaultDashboard({ vaultKey, vaultId, data, onDataChange, 
             />
           ) : (
             <DocumentsSection
-              vaultKey={vaultKey}
-              vaultId={vaultId}
               items={data.documents || []}
               onChange={next => onDataChange({ ...data, documents: next })}
             />
@@ -59,20 +55,17 @@ export default function VaultDashboard({ vaultKey, vaultId, data, onDataChange, 
         ) : (
           <div style={{ maxWidth: 520 }}>
             <div className="record-form">
-              <h4>Change Master Password</h4>
-              <input type="password" placeholder="New master password" value={newPass} onChange={e => setNewPass(e.target.value)} />
-              <button className="btn btn-primary" disabled={busy || newPass.length < 8} onClick={async () => {
-                await onChangePassword(newPass)
-                setPassMsg('Master password updated.')
-                setNewPass('')
-              }}>Update Password</button>
-              {passMsg && <div style={{ color: '#4ade80', fontSize: '0.85rem' }}>{passMsg}</div>}
+              <h4>Access PIN</h4>
+              <p style={{ color: '#7a7f7a', fontSize: '0.88rem' }}>
+                Your vault is stored in Supabase and opens with a 4-digit PIN. The PIN is a local
+                screen lock only — it does not encrypt your data or restrict access on the server.
+              </p>
             </div>
-            <BackupSection vaultKey={vaultKey} vaultId={vaultId} data={data} onDataChange={onDataChange} />
+            <BackupSection data={data} onDataChange={onDataChange} />
             <div className="record-form">
               <h4 style={{ color: '#ff9aa8' }}>Danger Zone</h4>
-              <p style={{ color: '#7a7f7a', fontSize: '0.88rem' }}>This permanently destroys the encrypted vault stored on this device.</p>
-              <button className="btn btn-ghost" style={{ borderColor: 'rgba(255,138,154,0.4)', color: '#ff9aa8' }} onClick={onWipe}>Wipe Vault</button>
+              <p style={{ color: '#7a7f7a', fontSize: '0.88rem' }}>This permanently deletes your personal details and all documents from Supabase.</p>
+              <button className="btn btn-ghost" style={{ borderColor: 'rgba(255,138,154,0.4)', color: '#ff9aa8' }} disabled={busy} onClick={onWipe}>Delete All Vault Data</button>
             </div>
           </div>
         )}

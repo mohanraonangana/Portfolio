@@ -49,7 +49,7 @@ const GROUPS = [
   ]},
 ]
 
-// No personal data is stored in source code. Everything you type is saved encrypted on this device only.
+// No personal data is stored in source code. Everything you type is saved to your Supabase vault.
 const DEFAULTS = {}
 
 function maskValue(v) {
@@ -109,7 +109,7 @@ export default function PersonalSection({ data, onSave, onDelete }) {
                 {editing ? (
                   <input
                     value={form[f.k] || ''}
-                    placeholder={f.sensitive ? 'Enter securely — stored encrypted' : ''}
+                    placeholder=""
                     onChange={e => set(f.k, e.target.value)}
                     style={{ flex: 1, maxWidth: 280 }}
                   />
@@ -131,11 +131,11 @@ export default function PersonalSection({ data, onSave, onDelete }) {
         )}
         {saved && (
           <div style={{ marginTop: 12, color: '#4ade80', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Check size={16} /> Saved securely (encrypted)
+            <Check size={16} /> Saved to Supabase
           </div>
         )}
         <p style={{ marginTop: 14, fontSize: '0.75rem', color: '#8f97b8' }}>
-          Values you leave blank stay empty. All values are AES-256-GCM encrypted and never leave this device.
+          Values you leave blank stay empty. Details are stored in your Supabase vault.
         </p>
       </div>
     </div>

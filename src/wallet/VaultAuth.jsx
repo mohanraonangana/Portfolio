@@ -3,7 +3,7 @@ import { LockKeyhole, ArrowLeft } from 'lucide-react'
 
 const CORRECT_PIN = '1108'
 
-export default function VaultAuth({ mode, onBack, onUnlock, onCreate }) {
+export default function VaultAuth({ onBack, onUnlock }) {
   const [digits, setDigits] = useState(['', '', '', ''])
   const [error, setError] = useState('')
   const [shake, setShake] = useState(false)
@@ -29,10 +29,9 @@ export default function VaultAuth({ mode, onBack, onUnlock, onCreate }) {
     setError('')
     setUnlocking(true)
     try {
-      if (mode === 'create') await onCreate(pin)
-      else await onUnlock(pin)
+      await onUnlock(pin)
     } catch {
-      setError('Unable to unlock vault.')
+      setError('Unable to load your vault. Check your connection and try again.')
       setUnlocking(false)
       reset()
     }
@@ -84,7 +83,7 @@ export default function VaultAuth({ mode, onBack, onUnlock, onCreate }) {
         <button type="button" className="back-link" onClick={onBack}><ArrowLeft size={14} /> Back to Vault</button>
         <div className="pin-lock"><LockKeyhole size={28} /></div>
         <h2 style={{ textAlign: 'center', letterSpacing: '0.1em' }}>ENTER PRIVATE VAULT</h2>
-        <p style={{ textAlign: 'center' }}>Enter your 4-digit PIN to unlock your vault.</p>
+        <p style={{ textAlign: 'center' }}>Enter your 4-digit PIN to open your vault.</p>
 
         <div className={`pin-row ${shake ? 'shake' : ''} ${unlocking ? 'unlocking' : ''}`}>
           {digits.map((d, i) => (
@@ -111,7 +110,7 @@ export default function VaultAuth({ mode, onBack, onUnlock, onCreate }) {
 
         {error && <div className="error-text" style={{ textAlign: 'center' }}>{error}</div>}
         {unlocking && !error && (
-          <div className="unlocking-text">Unlocking vault…</div>
+          <div className="unlocking-text">Opening vault…</div>
         )}
       </div>
     </div>

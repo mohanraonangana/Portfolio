@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import { createBackup, restoreBackup } from './vaultBackup.js'
 
-export default function BackupSection({ vaultKey, vaultId, data, onDataChange }) {
+export default function BackupSection({ data, onDataChange }) {
   const [exportPass, setExportPass] = useState('')
   const [importPass, setImportPass] = useState('')
   const [fileText, setFileText] = useState('')
@@ -13,7 +13,7 @@ export default function BackupSection({ vaultKey, vaultId, data, onDataChange })
   const doExport = async () => {
     setBusy(true); setMsg(null)
     try {
-      const json = await createBackup({ vaultKey, data, passphrase: exportPass, vaultId })
+      const json = await createBackup({ data, passphrase: exportPass })
       const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
       const a = document.createElement('a')
       a.href = url
@@ -37,12 +37,11 @@ export default function BackupSection({ vaultKey, vaultId, data, onDataChange })
   const doImport = async () => {
     setBusy(true); setMsg(null)
     try {
-      const s = await restoreBackup({ text: fileText, passphrase: importPass, vaultKey, data, onDataChange })
+      const s = await restoreBackup({ text: fileText, passphrase: importPass, data, onDataChange })
       const parts = []
       if (s.added.length) parts.push(`added: ${s.added.join(', ')}`)
-      if (s.replaced.length) parts.push(`replaced with newer: ${s.replaced.join(', ')}`)
       if (s.personal) parts.push('personal information restored')
-      if (s.skipped.length) parts.push(`already up to date: ${s.skipped.join(', ')}`)
+      if (s.skipped.length) parts.push(`already present: ${s.skipped.join(', ')}`)
       setMsg({ ok: true, text: 'Restore complete. ' + (parts.join(' · ') || 'Nothing to import.') })
       setImportPass(''); setFileText(''); setFileName('')
       if (fileRef.current) fileRef.current.value = ''
@@ -55,8 +54,9 @@ export default function BackupSection({ vaultKey, vaultId, data, onDataChange })
     <div className="record-form">
       <h4>Backup &amp; Restore</h4>
       <p style={{ color: '#7a7f7a', fontSize: '0.88rem' }}>
-        Export your personal details and documents as one encrypted file, protected by a passphrase you choose (not your PIN).
-        Import it on another device to merge it in. Nothing is uploaded anywhere.
+        Export your personal details and document metadata as one encrypted file, protected by a
+        passphrase you choose (not your PIN). Document files themselves stay in your Supabase vault.
+        Import merges metadata back in without creating duplicates.
       </p>
 
       <input type="password" placeholder="Backup passphrase (min 8 characters)" autoComplete="new-password" value={exportPass} onChange={e => setExportPass(e.target.value)} />

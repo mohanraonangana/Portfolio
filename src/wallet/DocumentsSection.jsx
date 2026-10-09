@@ -1,74 +1,93 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Image as ImageIcon, Eye, Download, Trash2, Plus, Search, X, ZoomIn, ZoomOut, Maximize2, FolderLock } from 'lucide-react'
-import { get, set as dbSet, del as dbDel } from './vaultDb.js'
+import { FileText, Image as ImageIcon, Eye, Download, Trash2, Plus, Search, X, ZoomIn, ZoomOut, Maximize2, FolderLock, RefreshCw, AlertTriangle } from 'lucide-react'
 import { isSyncEnabled, SYNC_BUCKET } from './supabaseClient.js'
-import { uploadDocument, createSignedUrl, removeObject, getLegacyDoc, upsertDocumentMeta, deleteDocumentMeta } from './vaultSync.js'
+import { uploadDocument, createSignedUrl, removeObject, upsertDocumentMeta, deleteDocumentMeta, listDocuments } from './vaultSync.js'
+import { KNOWN, CATEGORIES, ORDER, extFor, typeLabel, fmtSize, isImage, rowToDoc, docToRow } from './vaultData.js'
 
-// Encrypt raw file bytes with the existing vault key before persisting.
-async function encryptBytes(key, buffer) {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer)
-  const toB64 = buf => {
-    const bytes = new Uint8Array(buf)
-    let binary = ''
-    const CHUNK = 0x8000
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
-    }
-    return btoa(binary)
-  }
-  const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0))
-  return { iv: toB64(iv.buffer), ct: toB64(ct) }
-}
-async function decryptBytes(key, { iv, ct }) {
-  const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0))
-  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv) }, key, fromB64(ct))
-}
-
-// SHA-256 of raw bytes, hex-encoded. Used to verify byte-for-byte integrity.
+// SHA-256 of raw bytes, hex-encoded. Used to record byte-for-byte integrity.
 async function sha256Hex(buffer) {
   const digest = await crypto.subtle.digest('SHA-256', buffer)
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// Best-effort extension for legacy records that never stored the original name.
-const EXT_BY_MIME = {
-  'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png',
-  'image/webp': '.webp', 'image/gif': '.gif', 'application/pdf': '.pdf',
-}
-const extFor = t => EXT_BY_MIME[t] || ''
-
-
-const KNOWN = [
-  { match: /driving|licen[cs]e/i, name: 'Driving Licence', cat: 'Identity', replace: true },
-  { match: /adhar/i, name: 'Aadhaar Card', cat: 'Identity' },
-  { match: /pan/i, name: 'PAN Card', cat: 'Identity' },
-  { match: /btech/i, name: 'B.Tech Documents', cat: 'Education' },
-  { match: /10|12|tenth|twelfth/i, name: '10th & 12th Documents', cat: 'Education' },
-  { match: /photo/i, name: 'Personal Photo', cat: 'Personal' },
-  { match: /resume|cv/i, name: 'Resume', cat: 'Career' },
-]
-const CATEGORIES = ['Identity', 'Education', 'Personal', 'Career']
-const ORDER = ['Identity', 'Education', 'Personal', 'Career']
-
-const fmtSize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(0) + ' KB'
-const isImage = t => t.startsWith('image/')
-
-export default function DocumentsSection({ vaultKey, vaultId, items, onChange }) {
+export default function DocumentsSection({ items, onChange }) {
   const [filter, setFilter] = useState('All')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('name')
-  const [preview, setPreview] = useState(null) // {doc, url}
+  const [preview, setPreview] = useState(null) // {doc, url, state, error}
   const [zoom, setZoom] = useState(1)
+  const [thumbUrls, setThumbUrls] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [notice, setNotice] = useState('')
   const fileRef = useRef(null)
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const thumbRef = useRef(thumbUrls)
+  thumbRef.current = thumbUrls
+
+  const flash = msg => { setNotice(msg); setTimeout(() => setNotice(''), 4000) }
+
+  // Pull document metadata from Supabase and merge it into the list so files
+  // appear after a refresh and stay in sync across devices.
+  const loadRemote = async () => {
+    if (!isSyncEnabled) return
+    setLoading(true); setLoadError('')
+    try {
+      const rows = await listDocuments()
+      const remote = (rows || []).map(rowToDoc)
+      const byId = new Map()
+      for (const d of itemsRef.current) byId.set(d.id, d)
+      for (const r of remote) byId.set(r.id, { ...(byId.get(r.id) || {}), ...r })
+      const merged = [...byId.values()].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
+      const sig = xs => JSON.stringify(xs.map(d => [d.id, d.storagePath || '', d.size, d.type, d.originalName || '']))
+      if (sig(merged) !== sig(itemsRef.current)) await onChangeRef.current(merged)
+    } catch {
+      setLoadError('Could not load documents from Supabase.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadRemote() }, [])
+
+  // Generate (and refresh) signed thumbnails for image documents.
+  const thumbSig = items.filter(d => isImage(d.type) && d.storagePath).map(d => d.id + '|' + d.storagePath).join(';')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!isSyncEnabled) return
+    let cancelled = false
+    ;(async () => {
+      for (const d of itemsRef.current) {
+        if (!isImage(d.type) || !d.storagePath || thumbRef.current[d.id]) continue
+        try {
+          const url = await createSignedUrl(d.storagePath, { expiresIn: 900 })
+          if (url && !cancelled) { thumbRef.current = { ...thumbRef.current, [d.id]: url }; setThumbUrls(thumbRef.current) }
+        } catch { /* keep the icon fallback */ }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [thumbSig])
+
+  const refreshThumb = async doc => {
+    if (!doc.storagePath) return
+    try {
+      const url = await createSignedUrl(doc.storagePath, { expiresIn: 900 })
+      if (url) { thumbRef.current = { ...thumbRef.current, [doc.id]: url }; setThumbUrls(thumbRef.current) }
+    } catch { /* ignore */ }
+  }
 
   const filtered = useMemo(() => {
+    const q = query.toLowerCase()
     let list = items.filter(d =>
       (filter === 'All' || d.cat === filter) &&
-      d.name.toLowerCase().includes(query.toLowerCase())
+      (d.name || '').toLowerCase().includes(q)
     )
     list = [...list].sort((a, b) =>
-      sort === 'name' ? a.name.localeCompare(b.name) :
+      sort === 'name' ? (a.name || '').localeCompare(b.name || '') :
       sort === 'size' ? b.size - a.size :
       sort === 'date' ? b.addedAt - a.addedAt :
       ORDER.indexOf(a.cat) - ORDER.indexOf(b.cat)
@@ -85,28 +104,21 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
       const originalName = file.name
       const mime = file.type || 'application/octet-stream'
       const displayName = known ? known.name : file.name.replace(/\.[^.]+$/, '')
-      let storagePath = null
-      let sha256 = null
+      const sha256 = await sha256Hex(await file.arrayBuffer())
 
-      // Preferred path: upload the original bytes unchanged with the real
-      // content type, and record the metadata row.
-      if (isSyncEnabled && vaultId) {
-        try {
-          sha256 = await sha256Hex(await file.arrayBuffer())
-          storagePath = await uploadDocument(vaultId, id, originalName, file)
-          await upsertDocumentMeta({
-            id, vault_id: vaultId, display_name: displayName,
-            original_name: originalName, mime_type: mime, size: file.size,
-            bucket: SYNC_BUCKET, storage_path: storagePath, sha256,
-          })
-        } catch {
-          storagePath = null // offline / failed: fall back to local encrypted copy
-        }
-      }
-      // Offline fallback: keep the legacy encrypted copy in IndexedDB.
-      if (!storagePath) {
-        const enc = await encryptBytes(vaultKey, await file.arrayBuffer())
-        await dbSet('doc_' + id, enc)
+      // Supabase is the only store: upload the original bytes unchanged with the
+      // real content type, then record the metadata row.
+      let storagePath
+      try {
+        storagePath = await uploadDocument(id, originalName, file)
+        await upsertDocumentMeta({
+          id, display_name: displayName, original_name: originalName,
+          mime_type: mime, size: file.size, bucket: SYNC_BUCKET,
+          storage_path: storagePath, sha256,
+        })
+      } catch {
+        flash(`Upload failed for "${originalName}". Check your connection and try again.`)
+        continue
       }
 
       // Documents flagged `replace` (Driving Licence) keep a single current copy:
@@ -118,82 +130,82 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
       next.unshift({
         id, name: displayName, cat: known ? known.cat : 'Personal', type: mime,
         size: file.size, addedAt: Date.now(),
-        originalName, storagePath, bucket: storagePath ? SYNC_BUCKET : null, sha256,
+        originalName, storagePath, bucket: SYNC_BUCKET, sha256,
       })
     }
     await onChange(next)
     for (const old of revoke) {
-      await dbDel('doc_' + old.id)
-      if (isSyncEnabled) {
-        try {
-          if (old.storagePath) await removeObject(old.storagePath)
-          else await removeObject(`${vaultId}/${old.id}`) // legacy encrypted payload
-        } catch { /* ignore */ }
-        try { await deleteDocumentMeta(old.id) } catch { /* ignore */ }
-      }
+      try { if (old.storagePath) await removeObject(old.storagePath) } catch { /* ignore */ }
+      try { await deleteDocumentMeta(old.id) } catch { /* ignore */ }
     }
   }
 
-  // Resolve a viewable URL: signed URL for cloud files, decrypted blob for the
-  // legacy local/encrypted documents.
+  // Resolve a viewable URL via a fresh signed URL.
   const resolveUrl = async doc => {
-    if (doc.storagePath && isSyncEnabled) {
-      const url = await createSignedUrl(doc.storagePath, { expiresIn: 600 })
-      if (url) return url
-    }
-    let enc = await get('doc_' + doc.id)
-    if (!enc && isSyncEnabled) {
-      enc = await getLegacyDoc(vaultId, doc.id)
-      if (enc) await dbSet('doc_' + doc.id, enc) // cache remote copy locally
-    }
-    if (!enc) return null
-    const plain = await decryptBytes(vaultKey, enc)
-    return URL.createObjectURL(new Blob([plain], { type: doc.type }))
+    if (!isSyncEnabled || !doc.storagePath) throw new Error('missing')
+    const url = await createSignedUrl(doc.storagePath, { expiresIn: 900 })
+    if (!url) throw new Error('missing')
+    return url
   }
 
   const openPreview = async doc => {
-    const url = await resolveUrl(doc)
-    if (!url) return
     setZoom(1)
-    setPreview({ doc, url })
+    setPreview({ doc, url: null, state: 'loading', error: '' })
+    try {
+      const url = await resolveUrl(doc)
+      setPreview(p => (p && p.doc.id === doc.id ? { ...p, url, state: 'ready' } : p))
+    } catch {
+      setPreview(p => (p && p.doc.id === doc.id
+        ? { ...p, state: 'error', error: 'Could not load this file. It may have been deleted or moved.' }
+        : p))
+    }
+  }
+
+  const retryPreview = () => { if (preview) openPreview(preview.doc) }
+
+  // If a signed URL expires while the viewer is open, transparently re-sign once.
+  const onMediaError = async () => {
+    if (!preview || preview.state !== 'ready') return
+    try {
+      const url = await resolveUrl(preview.doc)
+      setPreview(p => (p ? { ...p, url, state: 'ready' } : p))
+    } catch {
+      setPreview(p => (p ? { ...p, state: 'error', error: 'The preview link expired and could not be refreshed.' } : p))
+    }
+  }
+
+  const triggerDownload = (url, filename, revoke) => {
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.rel = 'noopener'
+    document.body.appendChild(a); a.click(); a.remove()
+    if (revoke) setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
   const download = async doc => {
     const filename = doc.originalName || (doc.name + extFor(doc.type))
-    if (doc.storagePath && isSyncEnabled) {
-      try {
-        const url = await createSignedUrl(doc.storagePath, { expiresIn: 300, download: filename })
-        if (url) {
-          const a = document.createElement('a')
-          a.href = url; a.download = filename; a.rel = 'noopener'
-          document.body.appendChild(a); a.click(); a.remove()
-          return
-        }
-      } catch { /* fall through to local copy */ }
+    try {
+      const url = await createSignedUrl(doc.storagePath, { expiresIn: 300, download: filename })
+      if (!url) throw new Error('missing')
+      triggerDownload(url, filename, false)
+    } catch {
+      flash('Download failed — the file may have been deleted.')
     }
-    const url = await resolveUrl(doc)
-    if (!url) return
-    const a = document.createElement('a')
-    a.href = url; a.download = filename
-    document.body.appendChild(a); a.click(); a.remove()
-    if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
   const removeDoc = async doc => {
     if (!window.confirm(`Delete "${doc.name}" from your vault?`)) return
     onChange(items.filter(d => d.id !== doc.id))
-    await dbDel('doc_' + doc.id)
-    if (isSyncEnabled) {
-      try {
-        if (doc.storagePath) await removeObject(doc.storagePath)
-        else await removeObject(`${vaultId}/${doc.id}`) // legacy encrypted payload
-      } catch { /* ignore */ }
-      try { await deleteDocumentMeta(doc.id) } catch { /* ignore */ }
-    }
+    try { if (doc.storagePath) await removeObject(doc.storagePath) } catch { /* ignore */ }
+    try { await deleteDocumentMeta(doc.id) } catch { /* ignore */ }
   }
 
-  // Clear any open preview when unmounting (vault lock)
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url) }, [preview])
+  const closePreview = () => {
+    if (preview?.url?.startsWith('blob:')) URL.revokeObjectURL(preview.url)
+    setPreview(null)
+  }
+
+  // Revoke any blob URL when the preview changes or the section unmounts (lock).
+  useEffect(() => () => { if (preview?.url?.startsWith('blob:')) URL.revokeObjectURL(preview.url) }, [preview])
 
   return (
     <div>
@@ -208,8 +220,13 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
           <option value="size">Sort: File Size</option>
           <option value="cat">Sort: Category</option>
         </select>
+        {isSyncEnabled && (
+          <button className="icon-btn" title="Refresh from Supabase" onClick={loadRemote} disabled={loading} style={{ padding: '0 12px', height: 40 }}>
+            <RefreshCw size={16} className={loading ? 'spin' : ''} />
+          </button>
+        )}
         <button className="btn btn-primary doc-add" onClick={() => fileRef.current.click()}><Plus size={16} /> Add Document</button>
-        <input ref={fileRef} type="file" multiple accept=".pdf,image/*" hidden onChange={e => importFiles([...e.target.files])} />
+        <input ref={fileRef} type="file" multiple accept=".pdf,image/*" hidden onChange={e => { importFiles([...e.target.files]); e.target.value = '' }} />
       </div>
 
       <div className="doc-chips">
@@ -218,12 +235,27 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
         ))}
       </div>
 
-      {items.length === 0 ? (
+      {notice && <div className="doc-toast"><AlertTriangle size={15} /> {notice}</div>}
+
+      {loadError && (
+        <div className="doc-loaderr">
+          <AlertTriangle size={16} />
+          <span>{loadError}</span>
+          <button className="icon-btn" onClick={loadRemote}><RefreshCw size={14} /><span className="act-label">Retry</span></button>
+        </div>
+      )}
+
+      {loading && items.length === 0 ? (
+        <div className="empty-note" style={{ textAlign: 'center', padding: '50px 0' }}>
+          <div className="spinner" />
+          <p style={{ marginTop: 14 }}>Loading your documents…</p>
+        </div>
+      ) : items.length === 0 ? (
         <div className="empty-note" style={{ textAlign: 'center', padding: '50px 0' }}>
           <FolderLock size={40} style={{ opacity: 0.5, marginBottom: 12 }} />
           <p>No documents yet.</p>
           <button className="btn btn-primary" onClick={() => fileRef.current.click()}>Import Documents</button>
-          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>{isSyncEnabled ? 'Files are uploaded to your Supabase vault in their original format.' : 'Choose files from this device. They are encrypted in this browser and never uploaded anywhere.'}</p>
+          <p style={{ fontSize: '0.8rem', marginTop: 8 }}>{isSyncEnabled ? 'Files are stored in your Supabase vault in their original format.' : 'Cloud storage is not configured.'}</p>
         </div>
       ) : (
         <>
@@ -238,19 +270,24 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
                 {group.map(doc => (
                   <div className="record" key={doc.id}>
                     <div className="doc-card-head">
-                      {isImage(doc.type)
-                        ? <ImageIcon size={26} color="#b07cff" />
-                        : <FileText size={26} color="#7da2ff" />}
+                      <div className="doc-thumb">
+                        {isImage(doc.type) && thumbUrls[doc.id]
+                          ? <img src={thumbUrls[doc.id]} alt={doc.originalName || doc.name} loading="lazy" onError={() => refreshThumb(doc)} />
+                          : isImage(doc.type)
+                            ? <ImageIcon size={26} color="#b07cff" />
+                            : <FileText size={26} color="#7da2ff" />}
+                      </div>
                       <div className="doc-card-title">
                         <h4 style={{ margin: 0 }}>{doc.name}</h4>
                         <span className="chip chip-login">{doc.cat}</span>
                       </div>
                     </div>
-                    <div className="field-row"><span className="fl">Type</span><span className="fv">{isImage(doc.type) ? 'Image' : 'PDF'}</span></div>
+                    {doc.originalName && <div className="doc-file" title={doc.originalName}>{doc.originalName}</div>}
+                    <div className="field-row"><span className="fl">Type</span><span className="fv">{typeLabel(doc.type)}</span></div>
                     <div className="field-row"><span className="fl">Size</span><span className="fv">{fmtSize(doc.size)}</span></div>
                     <div className="field-row"><span className="fl">Added</span><span className="fv">{new Date(doc.addedAt).toLocaleDateString()}</span></div>
                     <div className="record-actions">
-                      <button className="icon-btn" title="Open" onClick={() => openPreview(doc)}><Eye size={16} /><span className="act-label">View</span></button>
+                      <button className="icon-btn" title="View" onClick={() => openPreview(doc)}><Eye size={16} /><span className="act-label">View</span></button>
                       <button className="icon-btn" title="Download" onClick={() => download(doc)}><Download size={16} /><span className="act-label">Download</span></button>
                       <button className="icon-btn" title="Delete" style={{ color: '#ff9aa8' }} onClick={() => removeDoc(doc)}><Trash2 size={16} /><span className="act-label">Delete</span></button>
                     </div>
@@ -264,24 +301,37 @@ export default function DocumentsSection({ vaultKey, vaultId, items, onChange })
       )}
 
       {preview && (
-        <div className="modal-backdrop" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null) }}>
+        <div className="modal-backdrop" onClick={closePreview}>
           <div className="doc-viewer" onClick={e => e.stopPropagation()}>
             <div className="doc-viewer-head">
-              <h3>{preview.doc.name}</h3>
+              <h3 title={preview.doc.originalName || preview.doc.name}>{preview.doc.originalName || preview.doc.name}</h3>
               <div style={{ display: 'flex', gap: 6 }}>
-                {!isImage(preview.doc.type) && (<>
+                {preview.state === 'ready' && !isImage(preview.doc.type) && (<>
                   <button className="icon-btn" title="Zoom in" onClick={() => setZoom(z => Math.min(z + 0.25, 3))}><ZoomIn size={18} /></button>
                   <button className="icon-btn" title="Zoom out" onClick={() => setZoom(z => Math.max(z - 0.25, 0.5))}><ZoomOut size={18} /></button>
                 </>)}
-                <button className="icon-btn" title="Fullscreen" onClick={() => document.querySelector('.doc-viewer').requestFullscreen?.()}><Maximize2 size={18} /></button>
+                <button className="icon-btn" title="Fullscreen" onClick={() => document.querySelector('.doc-viewer')?.requestFullscreen?.()}><Maximize2 size={18} /></button>
                 <button className="icon-btn" title="Download" onClick={() => download(preview.doc)}><Download size={18} /></button>
-                <button className="icon-btn" title="Close" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null) }}><X size={18} /></button>
+                <button className="icon-btn" title="Close" onClick={closePreview}><X size={18} /></button>
               </div>
             </div>
             <div className="doc-viewer-body" style={{ zoom }}>
-              {isImage(preview.doc.type)
-                ? <img src={preview.url} alt={preview.doc.name} />
-                : <iframe title={preview.doc.name} src={preview.url} />}
+              {preview.state === 'loading' && (
+                <div className="doc-viewer-msg"><div className="spinner" /><p>Loading preview…</p></div>
+              )}
+              {preview.state === 'error' && (
+                <div className="doc-viewer-msg">
+                  <AlertTriangle size={28} />
+                  <p>{preview.error}</p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-primary" onClick={retryPreview}><RefreshCw size={14} /> Retry</button>
+                    <button className="btn btn-ghost" onClick={closePreview}>Close</button>
+                  </div>
+                </div>
+              )}
+              {preview.state === 'ready' && (isImage(preview.doc.type)
+                ? <img src={preview.url} alt={preview.doc.originalName || preview.doc.name} onError={onMediaError} />
+                : <iframe title={preview.doc.name} src={preview.url} onError={onMediaError} />)}
             </div>
           </div>
         </div>

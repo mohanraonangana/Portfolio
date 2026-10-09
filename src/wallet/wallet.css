@@ -134,6 +134,40 @@ select option { background: #0d0f0d; }
 .doc-card-title { min-width: 0; }
 .act-label { display: none; }
 
+/* retrieval + preview states */
+.doc-thumb {
+  width: 46px; height: 46px; flex: 0 0 46px; border-radius: 10px;
+  display: grid; place-items: center; overflow: hidden;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+}
+.doc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.doc-file {
+  font-size: 0.74rem; color: #8f97b8; margin: 2px 0 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: 'Consolas', monospace;
+}
+.spinner {
+  width: 30px; height: 30px; margin: 0 auto; border-radius: 50%;
+  border: 3px solid rgba(200,245,66,0.2); border-top-color: #c8f542;
+  animation: spin 0.8s linear infinite;
+}
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.doc-viewer-msg {
+  min-height: 220px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; color: #b9c0d4; padding: 40px 16px;
+}
+.doc-viewer-msg p { margin: 0; max-width: 420px; }
+.doc-loaderr {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 12px 14px;
+  border-radius: 12px; background: rgba(255,107,107,0.08); border: 1px solid rgba(255,107,107,0.3); color: #ffb3bd; font-size: 0.85rem;
+}
+.doc-loaderr .icon-btn { margin-left: auto; color: #ffb3bd; }
+.doc-toast {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding: 10px 14px;
+  border-radius: 12px; background: rgba(255,180,72,0.1); border: 1px solid rgba(255,180,72,0.35); color: #ffcd8a; font-size: 0.85rem;
+}
+
 /* mobile / small screens: documents + compact navigation */
 @media (max-width: 640px) {
   .wallet-root { overflow-x: hidden; }

@@ -1,20 +1,24 @@
-// Document sync against Supabase Storage + metadata table.
+// Supabase-backed storage for the single shared vault.
 //
-// NOTE: documents are NOT encrypted before upload. The original file bytes are
-// uploaded verbatim with their real MIME type so they can be previewed and
-// downloaded byte-for-byte via signed URLs. This is a deliberate product
-// decision (see the vault UI warning). Supabase can read every document.
+// Supabase is the ONLY source of truth. There is no Supabase Auth and no
+// per-user isolation: access relies on public (anon/publishable) RLS policies,
+// so treat this vault as effectively public. Never store anything here that
+// must stay secret.
 //
 // Layout:
-//   {vaultId}/meta.json                - non-secret vault sync metadata (salt)
-//   {vaultId}/{docId}/{originalName}   - the original file, real content-type
+//   shared/{docId}/{originalName}  - the original file bytes, real content-type
 //
-// Metadata (filename, mime, size, bucket, path, sha256) lives in the
-// public.wallet_documents table; bytes live only in Storage.
+// Document metadata lives in public.wallet_documents; personal information is a
+// single row in public.vault_personal. Nothing is kept in localStorage,
+// sessionStorage or IndexedDB.
 import { supabase, isSyncEnabled, SYNC_BUCKET } from './supabaseClient.js'
 
-const META = 'meta.json'
 const DOCS_TABLE = 'wallet_documents'
+const PERSONAL_TABLE = 'vault_personal'
+const PERSONAL_ID = 'default'
+
+// Fixed namespace for all objects, so nothing depends on a device-specific id.
+export const DOC_NAMESPACE = 'shared'
 
 // Keep object keys flat and filesystem-safe while preserving the extension.
 export function safeName(name) {
@@ -25,37 +29,16 @@ export function safeName(name) {
 }
 
 // Build the canonical storage path for a document.
-export function docPath(vaultId, docId, originalName) {
-  return `${vaultId}/${docId}/${safeName(originalName)}`
-}
-
-// --- vault metadata (salt only; never the key or any personal data) ----------
-
-export async function putMeta(vaultId, meta) {
-  if (!isSyncEnabled || !vaultId) return
-  const { error } = await supabase.storage
-    .from(SYNC_BUCKET)
-    .upload(
-      `${vaultId}/${META}`,
-      new Blob([JSON.stringify({ ...meta, updatedAt: Date.now() })], { type: 'application/json' }),
-      { upsert: true, contentType: 'application/json' },
-    )
-  if (error) throw error
-}
-
-export async function getMeta(vaultId) {
-  if (!isSyncEnabled || !vaultId) return null
-  const { data, error } = await supabase.storage.from(SYNC_BUCKET).download(`${vaultId}/${META}`)
-  if (error || !data) return null
-  try { return JSON.parse(await data.text()) } catch { return null }
+export function docPath(docId, originalName) {
+  return `${DOC_NAMESPACE}/${docId}/${safeName(originalName)}`
 }
 
 // --- documents: bytes in Storage --------------------------------------------
 
 // Upload the original File/Blob unchanged, preserving bytes + content type.
-export async function uploadDocument(vaultId, docId, originalName, file) {
-  if (!isSyncEnabled || !vaultId) return null
-  const path = docPath(vaultId, docId, originalName)
+export async function uploadDocument(docId, originalName, file) {
+  if (!isSyncEnabled) throw new Error('Cloud storage is not configured.')
+  const path = docPath(docId, originalName)
   const { error } = await supabase.storage
     .from(SYNC_BUCKET)
     .upload(path, file, { upsert: true, contentType: file.type || 'application/octet-stream' })
@@ -80,18 +63,14 @@ export async function removeObject(path) {
   if (error) throw error
 }
 
-// --- documents: legacy encrypted payloads (read-only, for old records) -------
-
-// Old records stored `{ iv, ct }` as JSON. Kept so pre-existing documents keep
-// working locally/remotely without migration.
-export async function getLegacyDoc(vaultId, docId) {
-  if (!isSyncEnabled || !vaultId) return null
-  const { data, error } = await supabase.storage.from(SYNC_BUCKET).download(`${vaultId}/${docId}`)
-  if (error || !data) return null
-  try { return JSON.parse(await data.text()) } catch { return null }
-}
-
 // --- documents: metadata in Postgres ----------------------------------------
+
+export async function listDocuments() {
+  if (!isSyncEnabled) return []
+  const { data, error } = await supabase.from(DOCS_TABLE).select('*').order('created_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
 
 export async function upsertDocumentMeta(row) {
   if (!isSyncEnabled || !row) return
@@ -105,9 +84,32 @@ export async function deleteDocumentMeta(id) {
   if (error) throw error
 }
 
-export async function listDocumentMeta(vaultId) {
-  if (!isSyncEnabled || !vaultId) return []
-  const { data, error } = await supabase.from(DOCS_TABLE).select('*').eq('vault_id', vaultId)
-  if (error) return []
-  return data || []
+// --- personal information (single row, plaintext jsonb) ----------------------
+
+export async function getPersonal() {
+  if (!isSyncEnabled) return null
+  const { data, error } = await supabase.from(PERSONAL_TABLE).select('data').eq('id', PERSONAL_ID).maybeSingle()
+  if (error) throw error
+  return data?.data || null
+}
+
+export async function savePersonal(record) {
+  if (!isSyncEnabled) return
+  const { error } = await supabase.from(PERSONAL_TABLE).upsert(
+    { id: PERSONAL_ID, data: record || {}, updated_at: new Date().toISOString() },
+    { onConflict: 'id' },
+  )
+  if (error) throw error
+}
+
+// --- destructive reset (Settings -> Danger Zone) -----------------------------
+
+export async function wipeAllCloud(documents) {
+  if (!isSyncEnabled) return
+  const docs = documents || []
+  const paths = docs.map(d => d.storagePath).filter(Boolean)
+  if (paths.length) { try { await supabase.storage.from(SYNC_BUCKET).remove(paths) } catch { /* ignore */ } }
+  const ids = docs.map(d => d.id).filter(Boolean)
+  if (ids.length) { try { await supabase.from(DOCS_TABLE).delete().in('id', ids) } catch { /* ignore */ } }
+  try { await supabase.from(PERSONAL_TABLE).delete().eq('id', PERSONAL_ID) } catch { /* ignore */ }
 }
