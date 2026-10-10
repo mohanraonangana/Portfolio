@@ -43,7 +43,13 @@ export default function WalletApp() {
     setData(next)
     if (!isSyncEnabled) return
     try {
-      await savePersonal(next.personal && next.personal[0] ? next.personal[0] : {})
+      const record = next.personal && next.personal[0]
+      const hadRecord = data && data.personal && data.personal[0]
+      // Write only when a record actually exists, or when the user is explicitly
+      // clearing a record that was previously loaded. This stops an empty or
+      // not-yet-loaded vault from overwriting saved personal info with {}.
+      if (record) await savePersonal(record)
+      else if (hadRecord) await savePersonal({})
     } catch { /* stays in memory for this session */ }
   }
 
