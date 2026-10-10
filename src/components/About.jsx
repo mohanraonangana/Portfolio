@@ -1,4 +1,7 @@
 import React from 'react'
+import { CERTIFICATES } from '../data/certificates.js'
+
+const CERT_COUNT = String(CERTIFICATES.length).padStart(2, '0')
 
 export default function About() {
   return (
@@ -23,7 +26,7 @@ export default function About() {
           <div className="stat-row" style={{ marginTop: 0 }}>
             <div><h3>04</h3><span>PROJECTS</span></div>
             <div><h3>20+</h3><span>TECHNOLOGIES</span></div>
-            <div><h3>—</h3><span>CERTIFICATIONS</span></div>
+            <a className="stat-item" href="#certifications" data-cursor="view"><h3>{CERT_COUNT}</h3><span>CERTIFICATIONS</span></a>
             <div><h3>—</h3><span>YEARS LEARNING</span></div>
           </div>
         </div>

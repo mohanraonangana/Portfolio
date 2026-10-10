@@ -4,6 +4,7 @@ import Hero from '../components/Hero.jsx'
 import About from '../components/About.jsx'
 import Skills from '../components/Skills.jsx'
 import Projects from '../components/Projects.jsx'
+import Certifications from '../components/Certifications.jsx'
 import Experience from '../components/Experience.jsx'
 import Contact from '../components/Contact.jsx'
 import FxBackground from '../components/FxBackground.jsx'
@@ -20,6 +21,7 @@ export default function Portfolio() {
       <About />
       <Skills />
       <Projects />
+      <Certifications />
       <Experience />
       <Contact />
       <footer>

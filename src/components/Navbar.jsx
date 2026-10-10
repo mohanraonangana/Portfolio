@@ -4,7 +4,8 @@ import { Lock } from 'lucide-react'
 
 const ITEMS = [
   ['HOME', '#home'], ['ABOUT', '#about'], ['SKILLS', '#skills'],
-  ['WORK', '#projects'], ['EXPERIENCE', '#experience'], ['CONTACT', '#contact'],
+  ['WORK', '#projects'], ['CERTS', '#certifications'],
+  ['EXPERIENCE', '#experience'], ['CONTACT', '#contact'],
 ]
 
 export default function Navbar() {
